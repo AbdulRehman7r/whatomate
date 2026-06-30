@@ -85,6 +85,7 @@ const (
 	ResourceCallTransfers           = "call_transfers"
 	ResourceOutgoingCalls           = "outgoing_calls"
 	ResourceAuditLogs               = "audit_logs"
+	ResourceTickets                 = "tickets"
 )
 
 // PermissionAction constants for available actions
@@ -235,6 +236,11 @@ func DefaultPermissions() []Permission {
 
 		// Audit Logs
 		{Resource: ResourceAuditLogs, Action: ActionRead, Description: "View audit logs"},
+
+		// Tickets
+		{Resource: ResourceTickets, Action: ActionRead, Description: "View tickets"},
+		{Resource: ResourceTickets, Action: ActionWrite, Description: "Create, close and reopen tickets"},
+		{Resource: ResourceTickets, Action: ActionAssign, Description: "Assign and transfer tickets"},
 	}
 }
 
@@ -287,6 +293,8 @@ func SystemRolePermissions() map[string][]string {
 		"ivr_flows:read", "ivr_flows:write", "ivr_flows:delete",
 		"call_transfers:read", "call_transfers:write",
 		"outgoing_calls:read", "outgoing_calls:write",
+		// Tickets
+		"tickets:read", "tickets:write", "tickets:assign",
 	}
 
 	agentPermissions := []string{
@@ -309,6 +317,8 @@ func SystemRolePermissions() map[string][]string {
 		"call_transfers:read", "call_transfers:write",
 		// Outgoing Calls
 		"outgoing_calls:read", "outgoing_calls:write",
+		// Tickets
+		"tickets:read", "tickets:write", "tickets:assign",
 	}
 
 	return map[string][]string{

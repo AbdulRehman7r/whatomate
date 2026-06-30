@@ -630,6 +630,17 @@ func setupRoutes(g *fastglue.Fastglue, app *handlers.App, lo logf.Logger, basePa
 	g.PUT("/api/contacts/{id}/assign", app.AssignContact)
 	g.PUT("/api/contacts/{id}/tags", app.UpdateContactTags)
 	g.GET("/api/contacts/{id}/session-data", app.GetContactSessionData)
+	g.GET("/api/contacts/{id}/ticket", app.GetOrCreateContactTicket)
+
+	// Tickets
+	g.GET("/api/tickets", app.ListTickets)
+	g.GET("/api/tickets/{id}", app.GetTicket)
+	g.PUT("/api/tickets/{id}/assign", app.AssignTicket)
+	g.PUT("/api/tickets/{id}/transfer", app.TransferTicket)
+	g.PUT("/api/tickets/{id}/unassign", app.UnassignTicket)
+	g.PUT("/api/tickets/{id}/close", app.CloseTicket)
+	g.PUT("/api/tickets/{id}/reopen", app.ReopenTicket)
+	g.PUT("/api/tickets/{id}/attributes", app.UpdateTicketAttributes)
 
 	// Generic Import/Export
 	g.POST("/api/export", app.ExportData)

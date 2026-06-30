@@ -63,6 +63,13 @@ const (
 
 	// Call permission types
 	TypeCallPermissionUpdate = "call_permission_update"
+
+	// Ticket types
+	TypeTicketAssigned     = "ticket_assigned"
+	TypeTicketTransferred  = "ticket_transferred"
+	TypeTicketUnassigned   = "ticket_unassigned"
+	TypeTicketClosed       = "ticket_closed"
+	TypeTicketReopened     = "ticket_reopened"
 )
 
 // BroadcastMessage represents a message to be broadcast to clients

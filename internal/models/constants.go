@@ -4,9 +4,14 @@ package models
 type AuditAction string
 
 const (
-	AuditActionCreated AuditAction = "created"
-	AuditActionUpdated AuditAction = "updated"
-	AuditActionDeleted AuditAction = "deleted"
+	AuditActionCreated     AuditAction = "created"
+	AuditActionUpdated     AuditAction = "updated"
+	AuditActionDeleted     AuditAction = "deleted"
+	AuditActionAssigned    AuditAction = "assigned"
+	AuditActionTransferred AuditAction = "transferred"
+	AuditActionUnassigned  AuditAction = "unassigned"
+	AuditActionClosed      AuditAction = "closed"
+	AuditActionReopened    AuditAction = "reopened"
 )
 
 // TeamRole represents a user's role within a specific team (not organizational role)
