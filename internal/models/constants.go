@@ -28,6 +28,7 @@ type Direction string
 const (
 	DirectionIncoming Direction = "incoming"
 	DirectionOutgoing Direction = "outgoing"
+	DirectionSystem   Direction = "system" // system-generated activity log entries
 )
 
 // MessageType represents the type of WhatsApp message
@@ -45,6 +46,7 @@ const (
 	MessageTypeReaction    MessageType = "reaction"
 	MessageTypeLocation    MessageType = "location"
 	MessageTypeContact     MessageType = "contact"
+	MessageTypeActivity    MessageType = "activity" // system activity log (ticket events)
 )
 
 // MessageStatus represents the delivery status of a message

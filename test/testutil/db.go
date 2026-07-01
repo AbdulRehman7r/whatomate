@@ -130,6 +130,7 @@ func runMigrations(db *gorm.DB) error {
 		&models.AuditLog{},
 		// Tickets
 		&models.Ticket{},
+		&models.TicketActivity{},
 	)
 }
 
@@ -138,6 +139,7 @@ func runMigrations(db *gorm.DB) error {
 func cleanupTables(db *gorm.DB) {
 	tables := []string{
 		// Tickets
+		"ticket_activities",
 		"tickets",
 		// Dashboard tables
 		"widgets",
@@ -191,6 +193,7 @@ func cleanupTables(db *gorm.DB) {
 // TruncateTables truncates all tables (PostgreSQL only, faster than DELETE).
 func TruncateTables(db *gorm.DB) {
 	tables := []string{
+		"ticket_activities",
 		"tickets",
 		"widgets",
 		"catalog_products",

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 // used by both ListTickets and the single-ticket fetchers.
 type ticketRow struct {
 	ID              uuid.UUID           `gorm:"column:id"`
+	Number          int64               `gorm:"column:number"`
 	OrganizationID  uuid.UUID           `gorm:"column:organization_id"`
 	ContactID       uuid.UUID           `gorm:"column:contact_id"`
 	Status          models.TicketStatus `gorm:"column:status"`
@@ -55,12 +57,14 @@ func (a *App) fetchTicketRow(orgID uuid.UUID, where string, args ...any) (*ticke
 	return &row, nil
 }
 
-// getOrCreateTicket returns the existing ticket for a contact, creating one
-// (status=open) if it doesn't exist yet. createdByUserID is only recorded on
-// creation.
+// getOrCreateTicket returns the active (non-closed) ticket for a contact,
+// creating one (status=open) if none exists. Closed tickets are skipped so
+// that closing a ticket and then re-opening the conversation creates a new
+// ticket with a fresh number and attributes. createdByUserID is recorded only
+// on creation.
 func (a *App) getOrCreateTicket(orgID, contactID uuid.UUID, createdByUserID *uuid.UUID) (*models.Ticket, error) {
 	var ticket models.Ticket
-	err := a.DB.Where("organization_id = ? AND contact_id = ?", orgID, contactID).First(&ticket).Error
+	err := a.DB.Where("organization_id = ? AND contact_id = ? AND status != ?", orgID, contactID, models.TicketStatusClosed).First(&ticket).Error
 	if err == nil {
 		return &ticket, nil
 	}
@@ -85,6 +89,7 @@ func (a *App) getOrCreateTicket(orgID, contactID uuid.UUID, createdByUserID *uui
 // contact and assigned-user display fields.
 type TicketResponse struct {
 	ID               uuid.UUID           `json:"id"`
+	Number           int64               `json:"number"`
 	ContactID        uuid.UUID           `json:"contact_id"`
 	ContactName      string              `json:"contact_name,omitempty"`
 	PhoneNumber      string              `json:"phone_number,omitempty"`
@@ -104,6 +109,7 @@ type TicketResponse struct {
 func ticketRowToResponse(row *ticketRow) TicketResponse {
 	resp := TicketResponse{
 		ID:              row.ID,
+		Number:          row.Number,
 		ContactID:       row.ContactID,
 		Status:          row.Status,
 		AssignedUserID:  row.AssignedUserID,
@@ -168,6 +174,79 @@ func (a *App) broadcastTicketEvent(ticket *models.Ticket, msgType string, acting
 		Type:    msgType,
 		Payload: payload,
 	})
+}
+
+// recordTicketEvent writes a ticket state-change event to two places:
+//  1. The messages table (direction=system, type=activity) so it appears inline
+//     in the contact's chat timeline with no extra frontend work.
+//  2. The ticket_activities table for structured, queryable history.
+func (a *App) recordTicketEvent(ticket *models.Ticket, action models.AuditAction, actorID uuid.UUID, targetID *uuid.UUID, note string) {
+	// Resolve display names once.
+	actorName := a.lookupUserName(actorID)
+	var targetName string
+	if targetID != nil {
+		targetName = a.lookupUserName(*targetID)
+	}
+
+	// Build the human-readable content string.
+	var content string
+	switch action {
+	case models.AuditActionAssigned:
+		content = fmt.Sprintf("Ticket #%d assigned to %s by %s", ticket.Number, targetName, actorName)
+	case models.AuditActionTransferred:
+		content = fmt.Sprintf("Ticket #%d transferred to %s by %s", ticket.Number, targetName, actorName)
+	case models.AuditActionUnassigned:
+		content = fmt.Sprintf("Ticket #%d unassigned by %s", ticket.Number, actorName)
+	case models.AuditActionClosed:
+		content = fmt.Sprintf("Ticket #%d closed by %s", ticket.Number, actorName)
+	case models.AuditActionReopened:
+		content = fmt.Sprintf("Ticket #%d reopened by %s", ticket.Number, actorName)
+	default:
+		content = fmt.Sprintf("Ticket #%d: %s by %s", ticket.Number, action, actorName)
+	}
+	if note != "" {
+		content += ": " + note
+	}
+
+	// 1. System message in chat timeline.
+	msg := models.Message{
+		OrganizationID:  ticket.OrganizationID,
+		WhatsAppAccount: "",
+		ContactID:       ticket.ContactID,
+		Direction:       models.DirectionSystem,
+		MessageType:     models.MessageTypeActivity,
+		Content:         content,
+		SentByUserID:    &actorID,
+	}
+	if err := a.DB.Create(&msg).Error; err != nil {
+		a.Log.Error("Failed to create ticket activity message", "error", err)
+	}
+
+	// 2. Structured activity log.
+	activity := models.TicketActivity{
+		OrganizationID: ticket.OrganizationID,
+		TicketID:       ticket.ID,
+		ContactID:      ticket.ContactID,
+		Action:         string(action),
+		ActorUserID:    actorID,
+		ActorUserName:  actorName,
+		TargetUserID:   targetID,
+		TargetUserName: targetName,
+		Note:           note,
+		Content:        content,
+	}
+	if err := a.DB.Create(&activity).Error; err != nil {
+		a.Log.Error("Failed to create ticket activity log", "error", err)
+	}
+}
+
+// lookupUserName fetches a user's display name, falling back to "Unknown".
+func (a *App) lookupUserName(id uuid.UUID) string {
+	var u models.User
+	if err := a.DB.Select("full_name").First(&u, "id = ?", id).Error; err != nil {
+		return "Unknown"
+	}
+	return u.FullName
 }
 
 // findOrgUser verifies a user belongs to the organization, mirroring the
@@ -277,7 +356,7 @@ func (a *App) GetOrCreateContactTicket(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to load ticket", nil, "")
 	}
 
-	row, err := a.fetchTicketRow(orgID, "tickets.contact_id = ?", contactID)
+	row, err := a.fetchTicketRow(orgID, "tickets.contact_id = ? AND tickets.status != ?", contactID, models.TicketStatusClosed)
 	if err != nil {
 		a.Log.Error("Failed to fetch ticket after get-or-create", "error", err, "contact_id", contactID)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to load ticket", nil, "")
@@ -338,6 +417,7 @@ func (a *App) AssignTicket(r *fastglue.Request) error {
 
 	a.logAudit(orgID, userID, "ticket", ticket.ID, models.AuditActionAssigned, oldSnap, ticketAuditSnapshot(ticket))
 	a.broadcastTicketEvent(ticket, websocket.TypeTicketAssigned, userID, nil)
+	a.recordTicketEvent(ticket, models.AuditActionAssigned, userID, &assigneeID, "")
 
 	row, _ := a.fetchTicketRow(orgID, "tickets.id = ?", ticket.ID)
 	return r.SendEnvelope(ticketRowToResponse(row))
@@ -404,6 +484,7 @@ func (a *App) TransferTicket(r *fastglue.Request) error {
 		wsExtra = map[string]any{"note": req.Note}
 	}
 	a.broadcastTicketEvent(ticket, websocket.TypeTicketTransferred, userID, wsExtra)
+	a.recordTicketEvent(ticket, models.AuditActionTransferred, userID, &assigneeID, req.Note)
 
 	row, _ := a.fetchTicketRow(orgID, "tickets.id = ?", ticket.ID)
 	return r.SendEnvelope(ticketRowToResponse(row))
@@ -442,6 +523,7 @@ func (a *App) UnassignTicket(r *fastglue.Request) error {
 
 	a.logAudit(orgID, userID, "ticket", ticket.ID, models.AuditActionUnassigned, oldSnap, ticketAuditSnapshot(ticket))
 	a.broadcastTicketEvent(ticket, websocket.TypeTicketUnassigned, userID, nil)
+	a.recordTicketEvent(ticket, models.AuditActionUnassigned, userID, nil, "")
 
 	row, _ := a.fetchTicketRow(orgID, "tickets.id = ?", ticket.ID)
 	return r.SendEnvelope(ticketRowToResponse(row))
@@ -501,6 +583,7 @@ func (a *App) CloseTicket(r *fastglue.Request) error {
 		wsExtra = map[string]any{"note": req.Note}
 	}
 	a.broadcastTicketEvent(ticket, websocket.TypeTicketClosed, userID, wsExtra)
+	a.recordTicketEvent(ticket, models.AuditActionClosed, userID, nil, req.Note)
 
 	row, _ := a.fetchTicketRow(orgID, "tickets.id = ?", ticket.ID)
 	return r.SendEnvelope(ticketRowToResponse(row))
@@ -547,6 +630,7 @@ func (a *App) ReopenTicket(r *fastglue.Request) error {
 
 	a.logAudit(orgID, userID, "ticket", ticket.ID, models.AuditActionReopened, oldSnap, ticketAuditSnapshot(ticket))
 	a.broadcastTicketEvent(ticket, websocket.TypeTicketReopened, userID, nil)
+	a.recordTicketEvent(ticket, models.AuditActionReopened, userID, nil, "")
 
 	row, _ := a.fetchTicketRow(orgID, "tickets.id = ?", ticket.ID)
 	return r.SendEnvelope(ticketRowToResponse(row))
@@ -556,6 +640,89 @@ func (a *App) ReopenTicket(r *fastglue.Request) error {
 // A key mapped to a JSON null deletes that key.
 type UpdateTicketAttributesRequest struct {
 	Attributes map[string]any `json:"attributes"`
+}
+
+// ListTicketActivities returns all ticket activity logs for the organization
+// with optional filters: ticket_id, contact_id, actor_user_id, action.
+func (a *App) ListTicketActivities(r *fastglue.Request) error {
+	orgID, _, err := a.requireAuth(r, models.ResourceTickets, models.ActionRead)
+	if err != nil {
+		return nil
+	}
+
+	pg := parsePagination(r)
+
+	query := a.DB.Where("organization_id = ?", orgID)
+
+	if v := string(r.RequestCtx.QueryArgs().Peek("ticket_id")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid ticket_id", nil, "")
+		}
+		query = query.Where("ticket_id = ?", id)
+	}
+	if v := string(r.RequestCtx.QueryArgs().Peek("contact_id")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid contact_id", nil, "")
+		}
+		query = query.Where("contact_id = ?", id)
+	}
+	if v := string(r.RequestCtx.QueryArgs().Peek("actor_user_id")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid actor_user_id", nil, "")
+		}
+		query = query.Where("actor_user_id = ?", id)
+	}
+	if v := string(r.RequestCtx.QueryArgs().Peek("action")); v != "" {
+		query = query.Where("action = ?", v)
+	}
+
+	var total int64
+	if err := query.Model(&models.TicketActivity{}).Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		a.Log.Error("Failed to count ticket activities", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to list activities", nil, "")
+	}
+
+	var activities []models.TicketActivity
+	if err := query.Order("created_at DESC").
+		Limit(pg.Limit).Offset(pg.Offset).
+		Find(&activities).Error; err != nil {
+		a.Log.Error("Failed to list ticket activities", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to list activities", nil, "")
+	}
+
+	return r.SendEnvelope(listEnvelope("activities", activities, total, pg))
+}
+
+// GetTicketActivities returns the structured activity log for a ticket,
+// ordered oldest-first so the frontend can render a chronological timeline.
+func (a *App) GetTicketActivities(r *fastglue.Request) error {
+	orgID, _, err := a.requireAuth(r, models.ResourceTickets, models.ActionRead)
+	if err != nil {
+		return nil
+	}
+
+	id, err := parsePathUUID(r, "id", "ticket")
+	if err != nil {
+		return nil
+	}
+
+	if _, err := findByIDAndOrg[models.Ticket](a.DB, r, id, orgID, "Ticket"); err != nil {
+		return nil
+	}
+
+	var activities []models.TicketActivity
+	if err := a.DB.
+		Where("ticket_id = ? AND organization_id = ?", id, orgID).
+		Order("created_at ASC").
+		Find(&activities).Error; err != nil {
+		a.Log.Error("Failed to fetch ticket activities", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to fetch activities", nil, "")
+	}
+
+	return r.SendEnvelope(activities)
 }
 
 // UpdateTicketAttributes shallow-merges key/value scratch data into a

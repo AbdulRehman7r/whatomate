@@ -6,6 +6,27 @@ import (
 	"github.com/google/uuid"
 )
 
+// TicketActivity records every state-change event on a ticket (assign,
+// transfer, unassign, close, reopen). It is written alongside the system
+// message that appears in the contact's chat timeline, giving callers a
+// structured, queryable log without parsing message content.
+type TicketActivity struct {
+	ID             uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	OrganizationID uuid.UUID  `gorm:"type:uuid;index;not null" json:"organization_id"`
+	TicketID       uuid.UUID  `gorm:"type:uuid;index;not null" json:"ticket_id"`
+	ContactID      uuid.UUID  `gorm:"type:uuid;index;not null" json:"contact_id"`
+	Action         string     `gorm:"size:50;not null;index" json:"action"`
+	ActorUserID    uuid.UUID  `gorm:"type:uuid;not null" json:"actor_user_id"`
+	ActorUserName  string     `gorm:"size:255;not null" json:"actor_user_name"`
+	TargetUserID   *uuid.UUID `gorm:"type:uuid" json:"target_user_id,omitempty"`
+	TargetUserName string     `gorm:"size:255" json:"target_user_name,omitempty"`
+	Note           string     `gorm:"type:text" json:"note,omitempty"`
+	Content        string     `gorm:"type:text;not null" json:"content"`
+	CreatedAt      time.Time  `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (TicketActivity) TableName() string { return "ticket_activities" }
+
 // TicketStatus represents the lifecycle/assignment state of a ticket.
 type TicketStatus string
 
@@ -16,14 +37,17 @@ const (
 	TicketStatusClosed     TicketStatus = "closed"
 )
 
-// Ticket represents a single, persistent ticket tied to a contact. Unlike
-// AgentTransfer (an ephemeral chatbot<->agent handoff record), a Ticket is
-// reused for the lifetime of the contact: it is opened once, cycles through
-// assign/transfer/unassign, and is closed/reopened rather than recreated.
+// Ticket represents a support ticket tied to a contact. A contact can have
+// multiple tickets over time, but only one may be active (non-closed) at once.
+// Closing a ticket allows a new one to be opened for the same contact.
 type Ticket struct {
 	BaseModel
-	OrganizationID  uuid.UUID    `gorm:"type:uuid;index;not null" json:"organization_id"`
-	ContactID       uuid.UUID    `gorm:"type:uuid;uniqueIndex;not null" json:"contact_id"`
+	// Number is a globally sequential, human-readable ticket identifier (e.g. #42).
+	Number         int64        `gorm:"autoIncrement;uniqueIndex" json:"number"`
+	OrganizationID uuid.UUID    `gorm:"type:uuid;index;not null" json:"organization_id"`
+	// Partial unique index ensures at most one non-closed ticket per contact.
+	// Multiple closed tickets for the same contact are allowed (ticket history).
+	ContactID      uuid.UUID    `gorm:"type:uuid;not null;index;uniqueIndex:idx_active_ticket_contact,where:status != 'closed'" json:"contact_id"`
 	Status          TicketStatus `gorm:"size:20;default:'open';index" json:"status"`
 	AssignedUserID  *uuid.UUID   `gorm:"type:uuid;index" json:"assigned_user_id,omitempty"`
 	AssignedAt      *time.Time   `json:"assigned_at,omitempty"`

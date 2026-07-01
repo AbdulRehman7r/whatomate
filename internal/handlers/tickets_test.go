@@ -269,6 +269,35 @@ func TestApp_AssignTicket_PermissionDenied(t *testing.T) {
 	assert.Equal(t, fasthttp.StatusForbidden, testutil.GetResponseStatusCode(req))
 }
 
+func TestApp_GetOrCreateContactTicket_AfterClose_CreatesNewTicket(t *testing.T) {
+	app := newTestApp(t)
+	org := testutil.CreateTestOrganization(t, app.DB)
+	adminRole := testutil.CreateAdminRole(t, app.DB, org.ID)
+	user := testutil.CreateTestUser(t, app.DB, org.ID, testutil.WithRoleID(&adminRole.ID))
+	contact := testutil.CreateTestContact(t, app.DB, org.ID)
+
+	// Create and close the first ticket
+	first := createTestTicket(t, app, org.ID, contact.ID, models.TicketStatusClosed, nil)
+	assert.Greater(t, first.Number, int64(0), "ticket number should be auto-assigned")
+
+	// GetOrCreate should create a brand-new ticket since the existing one is closed
+	req := testutil.NewGETRequest(t)
+	testutil.SetAuthContext(req, org.ID, user.ID)
+	testutil.SetPathParam(req, "id", contact.ID.String())
+	require.NoError(t, app.GetOrCreateContactTicket(req))
+	assert.Equal(t, fasthttp.StatusOK, testutil.GetResponseStatusCode(req))
+	second := ticketEnvelope(t, req)
+
+	assert.NotEqual(t, first.ID, second.ID, "a new ticket should be created, not the closed one")
+	assert.Greater(t, second.Number, first.Number, "new ticket should have a higher number")
+	assert.Equal(t, models.TicketStatusOpen, second.Status)
+
+	// Both tickets should exist in DB
+	var count int64
+	require.NoError(t, app.DB.Model(&models.Ticket{}).Where("contact_id = ?", contact.ID).Count(&count).Error)
+	assert.Equal(t, int64(2), count)
+}
+
 func TestApp_UpdateTicketAttributes_MergeAndDelete(t *testing.T) {
 	app := newTestApp(t)
 	org := testutil.CreateTestOrganization(t, app.DB)

@@ -634,7 +634,9 @@ func setupRoutes(g *fastglue.Fastglue, app *handlers.App, lo logf.Logger, basePa
 
 	// Tickets
 	g.GET("/api/tickets", app.ListTickets)
+	g.GET("/api/ticket-activities", app.ListTicketActivities)
 	g.GET("/api/tickets/{id}", app.GetTicket)
+	g.GET("/api/tickets/{id}/activities", app.GetTicketActivities)
 	g.PUT("/api/tickets/{id}/assign", app.AssignTicket)
 	g.PUT("/api/tickets/{id}/transfer", app.TransferTicket)
 	g.PUT("/api/tickets/{id}/unassign", app.UnassignTicket)

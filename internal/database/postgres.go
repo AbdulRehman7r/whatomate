@@ -118,6 +118,7 @@ func GetMigrationModels() []MigrationModel {
 
 		// Tickets
 		{"Ticket", &models.Ticket{}},
+		{"TicketActivity", &models.TicketActivity{}},
 	}
 }
 

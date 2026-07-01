@@ -1139,11 +1139,22 @@ func (a *App) AssignContact(r *fastglue.Request) error {
 		}
 	}
 
+	oldSnap := map[string]any{"assigned_user_id": nil}
+	if contact.AssignedUserID != nil {
+		oldSnap["assigned_user_id"] = contact.AssignedUserID.String()
+	}
+
 	// Update contact assignment
 	if err := a.DB.Model(contact).Update("assigned_user_id", req.UserID).Error; err != nil {
 		a.Log.Error("Failed to assign contact", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to assign contact", nil, "")
 	}
+
+	newSnap := map[string]any{"assigned_user_id": nil}
+	if req.UserID != nil {
+		newSnap["assigned_user_id"] = req.UserID.String()
+	}
+	a.logAudit(orgID, userID, "contact", contact.ID, models.AuditActionAssigned, oldSnap, newSnap)
 
 	return r.SendEnvelope(map[string]any{
 		"message":          "Contact assigned successfully",
